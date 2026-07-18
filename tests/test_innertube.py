@@ -13,22 +13,8 @@ from yt_transcript.exceptions import (
     TranscriptsDisabled,
     VideoUnavailable,
 )
-from yt_transcript.innertube import InnertubeClient
+from yt_transcript.innertube import INNERTUBE_API_KEY, InnertubeClient
 
-
-FAKE_API_KEY = "AIzaSyFAKE_TEST_KEY_0000000000000000000"
-
-SAMPLE_WATCH_HTML = f"""
-<html><body>
-<script>var ytInitialPlayerResponse = {{"INNERTUBE_API_KEY":"{FAKE_API_KEY}"}};</script>
-</body></html>
-"""
-
-SAMPLE_WATCH_HTML_NO_KEY = """
-<html><body>
-<script>var ytInitialPlayerResponse = {};</script>
-</body></html>
-"""
 
 SAMPLE_PLAYER_RESPONSE = {
     "playabilityStatus": {"status": "OK"},
@@ -92,12 +78,10 @@ class TestInnertubeClient(unittest.TestCase):
         return err
 
     @patch("yt_transcript.innertube.urlopen")
-    def test_extracts_api_key_and_fetches_tracks(self, mock_urlopen):
-        # First call: watch page
-        watch_resp = self._mock_response(SAMPLE_WATCH_HTML)
-        # Second call: Innertube player API
-        player_resp = self._mock_response(json.dumps(SAMPLE_PLAYER_RESPONSE).encode())
-        mock_urlopen.side_effect = [watch_resp, player_resp]
+    def test_fetches_tracks_via_innertube(self, mock_urlopen):
+        mock_urlopen.return_value = self._mock_response(
+            json.dumps(SAMPLE_PLAYER_RESPONSE).encode()
+        )
 
         tracks = self.client.get_caption_tracks("abc123")
 
@@ -107,32 +91,25 @@ class TestInnertubeClient(unittest.TestCase):
         self.assertEqual(tracks[1]["language_code"], "es")
         self.assertFalse(tracks[1]["is_auto"])
 
-        # Verify Innertube call used extracted API key
-        innertube_call = mock_urlopen.call_args_list[1]
-        url = innertube_call[0][0].full_url
-        self.assertIn(f"key={FAKE_API_KEY}", url)
-
-    @patch("yt_transcript.innertube.urlopen")
-    def test_raises_when_no_api_key_in_html(self, mock_urlopen):
-        mock_urlopen.return_value = self._mock_response(SAMPLE_WATCH_HTML_NO_KEY)
-        with self.assertRaises(APIError):
-            self.client.get_caption_tracks("abc123")
+        # Verify the sole request went straight to the Innertube player API,
+        # skipping the watch page HTML fetch entirely.
+        self.assertEqual(mock_urlopen.call_count, 1)
+        url = mock_urlopen.call_args[0][0].full_url
+        self.assertIn(f"key={INNERTUBE_API_KEY}", url)
 
     @patch("yt_transcript.innertube.urlopen")
     def test_raises_when_no_captions(self, mock_urlopen):
-        mock_urlopen.side_effect = [
-            self._mock_response(SAMPLE_WATCH_HTML),
-            self._mock_response(json.dumps(SAMPLE_PLAYER_RESPONSE_NO_CAPTIONS).encode()),
-        ]
+        mock_urlopen.return_value = self._mock_response(
+            json.dumps(SAMPLE_PLAYER_RESPONSE_NO_CAPTIONS).encode()
+        )
         with self.assertRaises(TranscriptsDisabled):
             self.client.get_caption_tracks("abc123")
 
     @patch("yt_transcript.innertube.urlopen")
     def test_raises_when_video_unavailable(self, mock_urlopen):
-        mock_urlopen.side_effect = [
-            self._mock_response(SAMPLE_WATCH_HTML),
-            self._mock_response(json.dumps(SAMPLE_PLAYER_RESPONSE_UNPLAYABLE).encode()),
-        ]
+        mock_urlopen.return_value = self._mock_response(
+            json.dumps(SAMPLE_PLAYER_RESPONSE_UNPLAYABLE).encode()
+        )
         with self.assertRaises(VideoUnavailable):
             self.client.get_caption_tracks("abc123")
 
